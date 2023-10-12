@@ -1,6 +1,8 @@
 import { createSlice } from "@reduxjs/toolkit";
 import { userType } from "../Types";
 
+export const userStorageName = "superhero_user";
+
 export const defaultUser: userType = {
   id: "",
   username: "",
@@ -26,7 +28,7 @@ const userSlice = createSlice({
       const user = action.payload;
 
       // store user in local storage
-      localStorage.setItem("superhero_user", JSON.stringify(user));
+      localStorage.setItem(userStorageName, JSON.stringify(user));
 
       // set loged in user
       state.currenUser = user;
