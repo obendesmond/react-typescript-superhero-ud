@@ -1,24 +1,51 @@
 import {
   createUserWithEmailAndPassword,
+  deleteUser,
   signInWithEmailAndPassword,
   signOut,
+  updateEmail,
+  updatePassword,
 } from "@firebase/auth";
 import { auth, db } from "./Firebase";
-import { toastErr } from "../utils/toast";
+import { toastErr, toastSucc } from "../utils/toast";
 import CatchErr from "../utils/catchErr";
-import { authDataType, setLoadingType, userType } from "../Types";
+import {
+  authDataType,
+  setLoadingType,
+  taskListType,
+  taskType,
+  userType,
+} from "../Types";
 import { NavigateFunction } from "react-router";
 import {
+  addDoc,
+  collection,
+  deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
 } from "@firebase/firestore";
 import { defaultUser, setUser, userStorageName } from "../Redux/userSlice";
 import { AppDispatch } from "../Redux/store";
 import ConvertTime from "../utils/ConvertTime";
 import AvatarGenerator from "../utils/avatarGenerator";
+import {
+  addTask,
+  addTaskList,
+  defaultTask,
+  defaultTaskList,
+  deleteTask,
+  deleteTaskList,
+  saveTask,
+  saveTaskListTitle,
+  setTaskList,
+  setTaskListTasks,
+} from "../Redux/taskListSlice";
 
 // collection names
 const usersColl = "users";
@@ -107,23 +134,24 @@ export const BE_signIn = (
 export const BE_signOut = (
   dispatch: AppDispatch,
   goTo: NavigateFunction,
-  setLoading: setLoadingType
+  setLoading: setLoadingType,
+  deleteAcc?: boolean
 ) => {
   setLoading(true);
   // logout in firebase
   signOut(auth)
     .then(async () => {
-      // route to auth page
-      goTo("/auth");
-
       // set user offline
-      await updateUserInfo({ isOffline: true });
+      if (!deleteAcc) await updateUserInfo({ isOffline: true });
 
       // set currentSelected user to empty user
       dispatch(setUser(defaultUser));
 
       // remove from local storage
       localStorage.removeItem(userStorageName);
+
+      // route to auth page
+      goTo("/auth");
 
       setLoading(false);
     })
@@ -135,6 +163,87 @@ export const getStorageUser = () => {
   const usr = localStorage.getItem(userStorageName);
   if (usr) return JSON.parse(usr);
   else return null;
+};
+
+// save user profile
+export const BE_saveProfile = async (
+  dispatch: AppDispatch,
+  data: { email: string; username: string; password: string; img: string },
+  setLoading: setLoadingType
+) => {
+  setLoading(true);
+
+  const { email, username, password, img } = data;
+  const id = getStorageUser().id;
+
+  if (id) {
+    // update email if present
+    if (email && auth.currentUser) {
+      updateEmail(auth.currentUser, email)
+        .then(() => {
+          toastSucc("Email updated successfully!");
+        })
+        .catch((err) => CatchErr(err));
+    }
+
+    // update passsword if present
+    if (password && auth.currentUser) {
+      updatePassword(auth.currentUser, password)
+        .then(() => {
+          toastSucc("Password updated successfully!");
+        })
+        .catch((err) => CatchErr(err));
+    }
+
+    // update user collection only if username or img is present
+    if (username || img) {
+      await updateUserInfo({ username, img });
+      toastSucc("Updated profile successfully!");
+    }
+
+    // get user latest info
+    const userInfo = await getUserInfo(id);
+
+    // update user in state or store
+    dispatch(setUser(userInfo));
+    setLoading(false);
+  } else toastErr("BE_saveProfile: id not found");
+};
+
+// delete account
+export const BE_deleteAccount = async (
+  dispatch: AppDispatch,
+  goTo: NavigateFunction,
+  setLoading: setLoadingType
+) => {
+  setLoading(true);
+
+  // get all taskList
+  const userTaskList = await getAllTaskList();
+
+  // loop through user tasklist and delete each
+  if (userTaskList.length > 0) {
+    userTaskList.forEach(async (tL) => {
+      if (tL.id && tL.tasks) await BE_deleteTaskList(tL.id, tL.tasks, dispatch);
+    });
+  }
+
+  // delete the user info from collection
+  await deleteDoc(doc(db, usersColl, getStorageUser().id));
+
+  // finally delete user account
+  const user = auth.currentUser;
+
+  console.log("USER TO BE DELETED", user);
+
+  if (user) {
+    deleteUser(user)
+      .then(async () => {
+        BE_signOut(dispatch, goTo, setLoading, true);
+        //window.location.reload();
+      })
+      .catch((err) => CatchErr(err));
+  }
 };
 
 // add user to collection
@@ -218,4 +327,230 @@ const updateUserInfo = async ({
       lastSeen: serverTimestamp(),
     });
   }
+};
+
+// -------------------------- FOR Task list ----------------------
+
+// add a single task list
+export const BE_addTaskList = async (
+  dispatch: AppDispatch,
+  setLoading: setLoadingType
+) => {
+  setLoading(true);
+  const { title } = defaultTaskList;
+  const list = await addDoc(collection(db, taskListColl), {
+    title,
+    userId: getStorageUser().id,
+  });
+
+  const newDocSnap = await getDoc(doc(db, list.path));
+
+  if (newDocSnap.exists()) {
+    const newlyAddedDoc: taskListType = {
+      id: newDocSnap.id,
+      title: newDocSnap.data().title,
+    };
+
+    dispatch(addTaskList(newlyAddedDoc));
+    setLoading(false);
+  } else {
+    toastErr("BE_addTaskList:No such doc");
+    setLoading(false);
+  }
+};
+
+// get all task list
+export const BE_getTaskList = async (
+  dispatch: AppDispatch,
+  setLoading: setLoadingType
+) => {
+  setLoading(true);
+
+  // get user task list
+  const taskList = await getAllTaskList();
+
+  dispatch(setTaskList(taskList));
+  setLoading(false);
+};
+
+// save task list title
+export const BE_saveTaskList = async (
+  dispatch: AppDispatch,
+  setLoading: setLoadingType,
+  listId: string,
+  title: string
+) => {
+  setLoading(true);
+
+  await updateDoc(doc(db, taskListColl, listId), { title });
+
+  const updatedTaskList = await getDoc(doc(db, taskListColl, listId));
+
+  setLoading(false);
+
+  // dispatch to save task list
+  dispatch(
+    saveTaskListTitle({ id: updatedTaskList.id, ...updatedTaskList.data() })
+  );
+};
+
+// delete task list
+export const BE_deleteTaskList = async (
+  listId: string,
+  tasks: taskType[],
+  dispatch: AppDispatch,
+  setLoading?: setLoadingType
+) => {
+  if (setLoading) setLoading(true);
+
+  // looping through tasks and deleting each
+  if (tasks.length > 0) {
+    for (let i = 0; i < tasks.length; i++) {
+      const { id } = tasks[i];
+      if (id) BE_deleteTask(listId, id, dispatch);
+    }
+  }
+
+  // delete task list board
+  const listRef = doc(db, taskListColl, listId);
+  await deleteDoc(listRef);
+
+  const deletedTaskList = await getDoc(listRef);
+
+  if (!deletedTaskList.exists()) {
+    if (setLoading) setLoading(false);
+    // update state
+    dispatch(deleteTaskList(listId));
+  }
+};
+
+// get all users taskList
+const getAllTaskList = async () => {
+  const q = query(
+    collection(db, taskListColl),
+    where("userId", "==", getStorageUser().id)
+  );
+
+  const taskListSnapshot = await getDocs(q);
+  const taskList: taskListType[] = [];
+
+  taskListSnapshot.forEach((doc) => {
+    const { title } = doc.data();
+    taskList.push({
+      id: doc.id,
+      title,
+      editMode: false,
+      tasks: [],
+    });
+  });
+
+  return taskList;
+};
+
+// -------------------------------- FOR TASK -------------------------------
+
+// delete task
+export const BE_deleteTask = async (
+  listId: string,
+  id: string,
+  dispatch: AppDispatch,
+  setLoading?: setLoadingType
+) => {
+  if (setLoading) setLoading(true);
+
+  // delete doc
+  const taskRef = doc(db, taskListColl, listId, tasksColl, id);
+  await deleteDoc(taskRef);
+
+  const deletedTask = await getDoc(taskRef);
+
+  if (!deletedTask.exists()) {
+    if (setLoading) setLoading(false);
+    dispatch(deleteTask({ listId, id }));
+  }
+};
+
+// add task
+export const BE_addTask = async (
+  dispatch: AppDispatch,
+  listId: string,
+  setLoading: setLoadingType
+) => {
+  setLoading(true);
+
+  const task = await addDoc(collection(db, taskListColl, listId, tasksColl), {
+    ...defaultTask,
+  });
+
+  const newTaskSnapShot = await getDoc(doc(db, task.path));
+
+  if (newTaskSnapShot.exists()) {
+    const { title, description } = newTaskSnapShot.data();
+    const newTask: taskType = {
+      id: newTaskSnapShot.id,
+      title,
+      description,
+    };
+    // add in store
+    dispatch(addTask({ listId, newTask }));
+    setLoading(false);
+  } else {
+    toastErr("BE_addTask: No such document");
+    setLoading(false);
+  }
+};
+
+// update task
+export const BE_saveTask = async (
+  dispatch: AppDispatch,
+  listId: string,
+  data: taskType,
+  setLoading: setLoadingType
+) => {
+  setLoading(true);
+  const { id, title, description } = data;
+
+  if (id) {
+    const taskRef = doc(db, taskListColl, listId, tasksColl, id);
+    await updateDoc(taskRef, { title, description });
+
+    const updatedTask = await getDoc(taskRef);
+
+    if (updatedTask.exists()) {
+      setLoading(false);
+      // dispatch
+      dispatch(saveTask({ listId, id: updatedTask.id, ...updatedTask.data() }));
+    } else toastErr("BE_saveTask: updated task not found");
+  } else toastErr("BE_saveTask: id not found");
+};
+
+// get tasks for task list
+export const getTasksForTaskList = async (
+  dispatch: AppDispatch,
+  listId: string,
+  setLoading: setLoadingType
+) => {
+  setLoading(true);
+
+  // get tasks in a single task list
+  const taskRef = collection(db, taskListColl, listId, tasksColl);
+  const tasksSnapshot = await getDocs(taskRef);
+  const tasks: taskType[] = [];
+
+  // if the tasks snap shot is not empty then do foreach
+  if (!tasksSnapshot.empty) {
+    tasksSnapshot.forEach((task) => {
+      const { title, description } = task.data();
+      tasks.push({
+        id: task.id,
+        title,
+        description,
+        editMode: false,
+        collapsed: true,
+      });
+    });
+  }
+
+  dispatch(setTaskListTasks({ listId, tasks }));
+  setLoading(false);
 };
