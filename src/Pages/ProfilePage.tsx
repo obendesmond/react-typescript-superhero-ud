@@ -18,7 +18,7 @@ function ProfilePage() {
   const [saveProfileLoading, setSaveProfileLoading] = useState(false);
   const [deleteAccLoading, setDeleteAccLoading] = useState(false);
 
-  const currentUser = useSelector((state: RootState) => state.user.currenUser);
+  const currentUser = useSelector((state: RootState) => state.user.currentUser);
   const dispatch = useDispatch<AppDispatch>();
   const goTo = useNavigate();
 

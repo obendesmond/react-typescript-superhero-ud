@@ -27,6 +27,7 @@ const AddListBoard = () => {
         IconName={MdAdd}
         className="block md:hidden"
         loading={addLoading}
+        reduceOpacityOnHover={false}
       />
     </>
   );
