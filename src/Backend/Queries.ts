@@ -693,9 +693,7 @@ export const BE_getChats = async (dispatch: AppDispatch) => {
         senderId,
         recieverId,
         lastMsg,
-        updatedAt: updatedAt
-          ? ConvertTime(updatedAt.toDate())
-          : "no date yet: all messages",
+        updatedAt,
         recieverToSenderNewMsgCount,
         senderToRecieverNewMsgCount,
       });
